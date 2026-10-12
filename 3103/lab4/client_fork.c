@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,9 +9,23 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
-#define PORT 5000
-#define SERVER_IP "192.168.1.100"  /* Replace with your RPi IP */
 #define NUM_CHILDREN 3
+
+/* Parse a port number (1-65535). Returns -1 if invalid. */
+static int parse_port(const char *s)
+{
+    char *end;
+    long value;
+
+    errno = 0;
+    value = strtol(s, &end, 10);
+
+    if (errno != 0 || end == s || *end != '\0' ||
+        value < 1 || value > 65535)
+        return -1;
+
+    return (int)value;
+}
 
 int read_line(int fd, char *buf, size_t size)
 {
@@ -41,10 +54,9 @@ int read_line(int fd, char *buf, size_t size)
     return (int)i;
 }
 
-void run_child(int child_number)
+void run_child(int child_number, const struct sockaddr_in *server_addr)
 {
     int sock;
-    struct sockaddr_in addr;
     char message[64], reply[128];
 
     /* Give each child a different number. */
@@ -57,19 +69,8 @@ void run_child(int child_number)
         exit(1);
     }
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(PORT);
-
-    if (inet_pton(AF_INET, SERVER_IP,
-                  &addr.sin_addr) != 1) {
-        fprintf(stderr, "Invalid server IP\n");
-        close(sock);
-        exit(1);
-    }
-
-    if (connect(sock, (struct sockaddr *)&addr,
-                sizeof(addr)) < 0) {
+    if (connect(sock, (const struct sockaddr *)server_addr,
+                sizeof(*server_addr)) < 0) {
         perror("connect");
         close(sock);
         exit(1);
@@ -105,9 +106,31 @@ void run_child(int child_number)
     exit(n > 0 ? 0 : 1);
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
-    pid_t children[NUM_CHILDREN];
+    pid_t children[NUM_CHILDREN] = {0};
+    struct sockaddr_in server_addr;
+    int port;
+
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <server_ip> <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = parse_port(argv[2]);
+    if (port < 0) {
+        fprintf(stderr, "Invalid port '%s' (must be 1-65535)\n", argv[2]);
+        return 1;
+    }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons((uint16_t)port);
+
+    if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) != 1) {
+        fprintf(stderr, "Invalid server IP '%s'\n", argv[1]);
+        return 1;
+    }
 
     for (int i = 0; i < NUM_CHILDREN; i++) {
         pid_t pid = fork();
@@ -118,7 +141,7 @@ int main(void)
         }
 
         if (pid == 0) {
-            run_child(i + 1);
+            run_child(i + 1, &server_addr);
         }
 
         children[i] = pid;
