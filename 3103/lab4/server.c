@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +9,6 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define PORT 5000
 #define MAX_CLIENTS 3
 
 sem_t client_slots;
@@ -18,6 +16,22 @@ sem_t client_slots;
 typedef struct {
     int socket_fd;
 } ClientArgs;
+
+/* Parse a port number (1-65535). Returns -1 if invalid. */
+static int parse_port(const char *s)
+{
+    char *end;
+    long value;
+
+    errno = 0;
+    value = strtol(s, &end, 10);
+
+    if (errno != 0 || end == s || *end != '\0' ||
+        value < 1 || value > 65535)
+        return -1;
+
+    return (int)value;
+}
 
 /* Read one newline-terminated message from a socket. */
 int read_line(int fd, char *buf, size_t size)
@@ -87,10 +101,22 @@ void *handle_client(void *arg)
     return NULL;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
     int server_fd;
+    int port;
     struct sockaddr_in server_addr;
+
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = parse_port(argv[1]);
+    if (port < 0) {
+        fprintf(stderr, "Invalid port '%s' (must be 1-65535)\n", argv[1]);
+        return 1;
+    }
 
     if (sem_init(&client_slots, 0, MAX_CLIENTS) != 0) {
         perror("sem_init");
@@ -111,7 +137,7 @@ int main(void)
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    server_addr.sin_port = htons(PORT);
+    server_addr.sin_port = htons((uint16_t)port);
 
     if (bind(server_fd, (struct sockaddr *)&server_addr,
              sizeof(server_addr)) < 0) {
@@ -128,7 +154,7 @@ int main(void)
         return 1;
     }
 
-    printf("Server listening on port %d\n", PORT);
+    printf("Server listening on port %d\n", port);
 
     while (1) {
         /* Wait if three client workers are already active. */
