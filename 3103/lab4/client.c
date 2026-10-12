@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,8 +6,21 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
-#define PORT 5000
-#define SERVER_IP "192.168.1.100"  /* Replace with your RPi IP */
+/* Parse a port number (1-65535). Returns -1 if invalid. */
+static int parse_port(const char *s)
+{
+    char *end;
+    long value;
+
+    errno = 0;
+    value = strtol(s, &end, 10);
+
+    if (errno != 0 || end == s || *end != '\0' ||
+        value < 1 || value > 65535)
+        return -1;
+
+    return (int)value;
+}
 
 int read_line(int fd, char *buf, size_t size)
 {
@@ -37,14 +49,35 @@ int read_line(int fd, char *buf, size_t size)
     return (int)i;
 }
 
-int main(void)
+int main(int argc, char *argv[])
 {
     int sock;
+    int port;
     struct sockaddr_in server_addr;
     char input[128];
     char reply[128];
     char *end;
     long number;
+
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <server_ip> <port>\n", argv[0]);
+        return 1;
+    }
+
+    port = parse_port(argv[2]);
+    if (port < 0) {
+        fprintf(stderr, "Invalid port '%s' (must be 1-65535)\n", argv[2]);
+        return 1;
+    }
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons((uint16_t)port);
+
+    if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) != 1) {
+        fprintf(stderr, "Invalid server IP address '%s'\n", argv[1]);
+        return 1;
+    }
 
     printf("Enter an integer: ");
     fflush(stdout);
@@ -67,17 +100,6 @@ int main(void)
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("socket");
-        return 1;
-    }
-
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-
-    if (inet_pton(AF_INET, SERVER_IP,
-                  &server_addr.sin_addr) != 1) {
-        fprintf(stderr, "Invalid server IP address\n");
-        close(sock);
         return 1;
     }
 
