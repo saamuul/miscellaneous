@@ -7,7 +7,7 @@
  *       PID, value sent, buffer slot index, current buffer sum
  *
  * Build: gcc client.c -o client
- * Run:   ./client N [server_ip] [port]
+ * Run:   ./client <N> <server_ip> <port>
  *        e.g. ./client 8 192.168.1.50 8080
  */
 
@@ -22,9 +22,6 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
-
-#define DEFAULT_IP    "127.0.0.1"
-#define DEFAULT_PORT  8080
 
 static int read_full(int fd, void *buf, size_t n)
 {
@@ -106,8 +103,8 @@ static void child_work(const char *ip, int port)
 
 int main(int argc, char *argv[])
 {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s N [server_ip] [port]\n", argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, "Usage: %s <N> <server_ip> <port>\n", argv[0]);
         return 1;
     }
 
@@ -116,8 +113,14 @@ int main(int argc, char *argv[])
         fprintf(stderr, "N must be a positive integer\n");
         return 1;
     }
-    const char *ip = (argc > 2) ? argv[2] : DEFAULT_IP;
-    int port       = (argc > 3) ? atoi(argv[3]) : DEFAULT_PORT;
+
+    const char *ip = argv[2];
+
+    int port = atoi(argv[3]);
+    if (port <= 0 || port > 65535) {
+        fprintf(stderr, "Invalid port: %s (must be 1-65535)\n", argv[3]);
+        return 1;
+    }
 
     for (int i = 0; i < n; i++) {
         pid_t pid = fork();
