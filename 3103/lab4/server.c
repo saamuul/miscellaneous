@@ -8,7 +8,7 @@
  *   inserts value, updates index + sum, replies with: value, slot, sum
  *
  * Build: gcc server.c -o server -pthread
- * Run:   ./server [port]        (default port 8080)
+ * Run:   ./server <port>        e.g. ./server 8080
  */
 
 #include <stdio.h>
@@ -22,7 +22,6 @@
 #include <netinet/in.h>
 
 #define BUFFER_SIZE   5
-#define DEFAULT_PORT  8080
 #define BACKLOG       16
 
 /* ---------- Shared state (protected by buf_mutex) ---------- */
@@ -99,7 +98,16 @@ static void *client_thread(void *arg)
 
 int main(int argc, char *argv[])
 {
-    int port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+        return 1;
+    }
+
+    int port = atoi(argv[1]);
+    if (port <= 0 || port > 65535) {
+        fprintf(stderr, "Invalid port: %s (must be 1-65535)\n", argv[1]);
+        return 1;
+    }
 
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0) { perror("socket"); return 1; }
