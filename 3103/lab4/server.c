@@ -1,25 +1,32 @@
 /*
- * Client.c  (runs on the Ubuntu PC)
+ * Server.c  (runs on the RPi)
  *
- * Usage: ./client [hostname] [port]        -> asks the user to key in a number
- *        ./client [hostname] [port] [N]    -> forks N children, each sends a
- *                                             random number to the server
+ * - Port is given on the command line
+ * - Runs indefinitely
+ * - One thread per client, max 3 threads at a time (semaphore)
+ * - Waits a few seconds before replying (simulated delay)
+ * - Replies with the received number multiplied by 5
  *
- * Compile: gcc client.c -o client
- * Run:     ./client 192.168.1.20 8080
- *          ./client 192.168.1.20 8080 3
+ * Compile: gcc server.c -o server -pthread
+ * Run:     ./server 8080
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
 #include <strings.h>
-#include <time.h>
+#include <signal.h>
+#include <pthread.h>
+#include <semaphore.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <netdb.h>
+#include <arpa/inet.h>
+
+#define MAX_THREADS 3      /* max clients served at the same time */
+#define DELAY_SEC   3      /* delay before replying to a client   */
+
+sem_t slots;               /* counting semaphore: free thread slots */
 
 void error(char *m)
 {
@@ -27,96 +34,110 @@ void error(char *m)
     exit(1);
 }
 
-/* Connects to the server, sends 'msg', prints the reply.
- * 'tag' is a prefix for the printed lines (e.g. child PID). */
-void send_request(char *hostname, int port, char *msg, char *tag)
+/* Thread function: serves ONE client */
+void *serve_client(void *arg)
 {
-    int sockfd, n;
-    struct sockaddr_in serv_addr;
-    struct hostent *server;
+    int newsockfd = *(int *)arg;
+    int n;
+    long num;
     char buffer[256];
+
+    free(arg);
+    bzero(buffer, 256);
+
+    n = read(newsockfd, buffer, 255);
+    if (n < 0) {
+        perror("ERROR reading from socket");
+    } else {
+        num = atol(buffer);
+        printf("[thread %lu] Message received: %ld, replying in %d s...\n",
+               (unsigned long)pthread_self(), num, DELAY_SEC);
+
+        sleep(DELAY_SEC);                       /* delay the response */
+
+        bzero(buffer, 256);
+        sprintf(buffer, "%ld x 5 = %ld", num, num * 5);
+
+        n = write(newsockfd, buffer, strlen(buffer) + 1);
+        if (n < 0)
+            perror("ERROR writing back to socket");
+        else
+            printf("[thread %lu] Replied: %s\n",
+                   (unsigned long)pthread_self(), buffer);
+    }
+
+    close(newsockfd);
+    sem_post(&slots);                           /* give the slot back */
+    return NULL;
+}
+
+int main(int argc, char *argv[])
+{
+    int sockfd, *newsockfd, port;
+    socklen_t clilen;
+    struct sockaddr_in serv_addr, cli_addr;
+    pthread_t tid;
+
+    if (argc < 2) {
+        fprintf(stderr, "ERROR, no port provided\nusage: %s [port]\n", argv[0]);
+        exit(1);
+    }
+    port = atoi(argv[1]);
+
+    signal(SIGPIPE, SIG_IGN);                   /* ignore early client disconnects */
+
+    /* semaphore starts at MAX_THREADS = number of free slots */
+    if (sem_init(&slots, 0, MAX_THREADS) != 0)
+        error("ERROR initialising semaphore");
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
         error("ERROR opening socket");
 
-    server = gethostbyname(hostname);
-    if (server == NULL) {
-        fprintf(stderr, "ERROR, no such host\n");
-        exit(1);
-    }
-
-    // start with a clean address structure
     memset((char *)&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;             // internet socket
-    bcopy((char *)server->h_addr, (char *)&serv_addr.sin_addr.s_addr,
-          server->h_length);
-    serv_addr.sin_port = htons(port);
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = INADDR_ANY;
+    serv_addr.sin_port = htons(port);           /* host to network */
 
-    if (connect(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
-        error("ERROR connecting");
+    if (bind(sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
+        error("ERROR binding to socket");
 
-    printf("%sSending: %s\n", tag, msg);
-    n = write(sockfd, msg, strlen(msg));
-    if (n < 0)
-        error("ERROR writing to socket");
+    listen(sockfd, 5);
+    clilen = sizeof(cli_addr);
+    printf("Server listening on port %d (max %d threads, %d s delay)\n",
+           port, MAX_THREADS, DELAY_SEC);
 
-    bzero(buffer, 256);
-    n = read(sockfd, buffer, 255);              // blocks until server replies
-    if (n < 0)
-        error("ERROR reading from socket");
+    while (1) {                                 /* run indefinitely */
+        sem_wait(&slots);                       /* wait for a free slot; if all
+                                                   3 are busy, clients queue up */
 
-    printf("%sServer replied: %s\n", tag, buffer);
-    close(sockfd);
-}
-
-int main(int argc, char *argv[])
-{
-    int port, i, nchild;
-    pid_t pid;
-    char buffer[256];
-    char tag[64];
-
-    if (argc < 3)
-        error("usage client [hostname] [port] [optional: number of children]\n");
-
-    port = atoi(argv[2]);
-
-    /* ---------- Mode 1: user keys in a number ---------- */
-    if (argc == 3) {
-        printf("Please enter a number: ");
-        bzero(buffer, 256);
-        fgets(buffer, 255, stdin);
-        buffer[strcspn(buffer, "\n")] = '\0';   // strip newline
-
-        send_request(argv[1], port, buffer, "");
-        return 0;
-    }
-
-    /* ---------- Mode 2: fork N children, random numbers ---------- */
-    nchild = atoi(argv[3]);
-    if (nchild < 1 || nchild > 10)
-        error("N must be between 1 and 10\n");
-
-    for (i = 0; i < nchild; i++) {
-        pid = fork();
-        if (pid < 0)
-            error("ERROR on fork");
-
-        if (pid == 0) {
-            /* child process */
-            srand(time(NULL) ^ (getpid() << 8) ^ i);
-            sprintf(buffer, "%d", (rand() % 1000) + 1);   // random 1..1000
-            sprintf(tag, "[child %d, PID %d] ", i + 1, getpid());
-
-            send_request(argv[1], port, buffer, tag);
-            exit(0);
+        newsockfd = malloc(sizeof(int));
+        if (newsockfd == NULL) {
+            perror("ERROR on malloc");
+            sem_post(&slots);
+            continue;
         }
-        /* parent: carry on and fork the next child */
-    }
 
-    while (wait(NULL) > 0)                      // wait for all children
-        ;
+        *newsockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &clilen);
+        if (*newsockfd < 0) {
+            perror("ERROR on accept");
+            free(newsockfd);
+            sem_post(&slots);
+            continue;
+        }
+
+        printf("Connection from %s:%d\n",
+               inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port));
+
+        if (pthread_create(&tid, NULL, serve_client, newsockfd) != 0) {
+            perror("ERROR creating thread");
+            close(*newsockfd);
+            free(newsockfd);
+            sem_post(&slots);
+            continue;
+        }
+        pthread_detach(tid);
+    }
 
     return 0;
 }
