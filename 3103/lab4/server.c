@@ -27,6 +27,8 @@
 #define DELAY_SEC   3      /* delay before replying to a client   */
 
 sem_t slots;               /* counting semaphore: free thread slots */
+int total_served = 0;
+pthread_mutex_t count_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void error(char *m)
 {
@@ -37,6 +39,7 @@ void error(char *m)
 /* Thread function: serves ONE client */
 void *serve_client(void *arg)
 {
+    // pointer to the client socket
     int newsockfd = *(int *)arg;
     int n;
     long num;
@@ -45,6 +48,7 @@ void *serve_client(void *arg)
     free(arg);
     bzero(buffer, 256);
 
+    // read the socket
     n = read(newsockfd, buffer, 255);
     if (n < 0) {
         perror("ERROR reading from socket");
@@ -57,13 +61,19 @@ void *serve_client(void *arg)
 
         bzero(buffer, 256);
         sprintf(buffer, "%ld x 5 = %ld", num, num * 5);
-
+        
+        // write back to socket after calculation
         n = write(newsockfd, buffer, strlen(buffer) + 1);
         if (n < 0)
             perror("ERROR writing back to socket");
         else
             printf("[thread %lu] Replied: %s\n",
                    (unsigned long)pthread_self(), buffer);
+
+            pthread_mutex_lock(&count_mutex);
+            total_served++;
+            printf("[thread %lu] Total requests served: %d\n", (unsigned long) pthread_self(), total_served);
+            pthread_mutex_unlock(&count_mutex);
     }
 
     close(newsockfd);
@@ -90,10 +100,12 @@ int main(int argc, char *argv[])
     if (sem_init(&slots, 0, MAX_THREADS) != 0)
         error("ERROR initialising semaphore");
 
+    // create a stream socket, IPv4
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0)
         error("ERROR opening socket");
 
+    // changing attributes
     memset((char *)&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = INADDR_ANY;
@@ -128,7 +140,7 @@ int main(int argc, char *argv[])
 
         printf("Connection from %s:%d\n",
                inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port));
-
+        
         if (pthread_create(&tid, NULL, serve_client, newsockfd) != 0) {
             perror("ERROR creating thread");
             close(*newsockfd);
