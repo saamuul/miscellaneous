@@ -23,12 +23,14 @@ static bool ledOn = 0;                            /* used to toggle state of LED
 /* The GPIO IRQ handler function */
 static irqreturn_t rpi_gpio_isr(int irq, void *dev_id)
 {
+    /*
     static unsigned long last_jiffies = 0;
 
-    /* software debounce: ignore edges within 200 ms of the last accepted one */
+    // software debounce: ignore edges within 200 ms of the last accepted one
     if (time_before(jiffies, last_jiffies + msecs_to_jiffies(200)))
         return IRQ_HANDLED;
     last_jiffies = jiffies;
+    */
 
     ledOn = !ledOn;                    /* toggle the LED state */
     gpio_set_value(ledGreen, ledOn);   /* set LED accordingly */
@@ -66,6 +68,8 @@ static int __init rpi_gpio_init(void)
     result = gpio_request(pushButton, "sysfs");/* request for push button GPIO */
     if (result) { gpio_free(ledGreen); return result; }
     gpio_direction_input(pushButton);          /* set up as input */
+    gpio_set_debounce(pushButton, 1000);
+
     /* gpio_set_debounce() is gone from newer kernels; debounce in the ISR instead */
 
     irqNumber = gpio_to_irq(pushButton);       /* map pushbutton to IRQ number */
